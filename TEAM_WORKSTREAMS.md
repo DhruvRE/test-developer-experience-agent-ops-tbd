@@ -1,52 +1,68 @@
 # Team Workstreams
 
-Three people, three owners. Each owner has a clear area, a list of tasks, and a definition of done.
-Swap names in: **Dev 1** (GitHub integration), **Dev 2** (monitoring and failure intelligence), **Dev 3** (testing and quality).
+Three owners, one product. Each owner has a clear area, a task list, and a definition of done.
 
-Goal for the first 8 weeks: a failed GitHub Actions deployment is detected, diagnosed, and (when it is a code or config problem)
-turned into a validated fix pull request that a human approves. See `docs/product/PLAN.md` for the evaluation set and targets.
+| Person | Area |
+|---|---|
+| **Yogesh** | GitHub integration and the CI views in the app |
+| **Ishan** | Test suites, the test repo, the eval harness, and the fix validator |
+| **Dhruv** | Agent ops (AI error detection, fixing, automated pull requests) and monitoring support |
+
+Goal for the first 8 weeks: a failed GitHub Actions run is detected, diagnosed, and (when it is a code or config problem)
+turned into a validated fix pull request that a human approves. Targets and the 20-failure evaluation set are in `docs/product/PLAN.md`.
 
 ---
 
 ## 1. Who owns what
 
-| | Dev 1: GitHub integration | Dev 2: Monitoring and failure intelligence | Dev 3: Testing and quality |
+| | Yogesh | Ishan | Dhruv |
 |---|---|---|---|
-| Mission | Connect GitHub, receive failures, create PRs | Understand failures: logs, redaction, classification, dashboards | Prove it works: test repo, failure set, eval harness, CI, sandbox |
-| Main code | `apps/api` (auth, github, projects, webhooks) | `apps/worker` (failure pipeline), `apps/web` (failures views) | `failure-testbed` repo, `apps/eval`, CI workflows, test utilities |
-| Hands off to | Dev 2 (failure events, GitHub client) | Dev 1 (fix proposals to turn into PRs) | Everyone (failure repos, results, CI) |
+| Mission | Link repos to projects. Show every CI run, step, log, and failure | Prove it works: tests, test repo, scoring, validation | Detect, diagnose, fix, and open PRs with AI. Add monitoring |
+| Backend code | `apps/api/src/modules/{auth,github,projects,webhooks,runs}` | `apps/eval`, `packages/validator`, `packages/testing` | `apps/worker/src/{failures,agent}`, `apps/api/src/modules/{agent,monitoring}` |
+| Frontend code | `apps/web/src/features/{auth,projects,runs,failures}` | none | `apps/web/src/features/{agent,monitoring}` |
+| Other | GitHub App, webhooks | `failure-testbed` repo, `ci.yml` of the main repo | Prompts, agent traces, metrics |
+| Database tables | `User`, `Organization`, `Project`, `Run`, `Job`, `Step`, `Failure` | none (reads only) | `Diagnosis`, `AgentRun`, `FixAttempt` |
 
-Two adjustments to your original split, and why:
-1. **"Monitoring" starts as pipeline and deployment monitoring.** For the MVP, monitoring means seeing failed runs, their logs, and their diagnosis in the dashboard.
-   Prometheus, Grafana, custom graphs and alerting come after the week 8 decision.
-2. **Dev 2 also owns the AI classifier.** Failure detection feeds the AI directly, so the same person should own both. This is the riskiest part, so Dev 2 starts on it in week 1.
+**Dhruv has the largest scope**, so the plan protects his time:
+- Prometheus, Grafana, and custom widgets start only after the week 8 decision. Until then, monitoring means platform metrics and agent traces (section 6).
+- Ishan builds the fix validator (sandbox), not Dhruv.
+- Yogesh builds the PR-writing primitive in the GitHub client. Dhruv's agent calls it.
+- Yogesh builds the failure pages and approval screens. Dhruv supplies the diagnosis and fix panels that sit inside them.
+
+### Pipeline views versus monitoring (no overlap)
+- **Yogesh, pipeline views:** data that comes from GitHub: runs, jobs, steps, durations, status, logs, failures, success rate and average duration per project.
+- **Dhruv, monitoring:** data the platform and agents produce: agent success rate, classification accuracy, cost and latency, queue health. Later: Prometheus/Grafana integration, the Metrics Gateway, custom widgets, alerting.
 
 ---
 
 ## 2. Contracts between you (agree in week 1, half a day together)
 
-These are the handoff points. Put each as a Zod schema in `packages/shared` and do not change them without telling the others.
+Define each as a Zod schema in `packages/shared`. Do not change one without telling the others first.
 
 | Contract | From → To | Content |
 |---|---|---|
-| `FailureDetected` job | Dev 1 → Dev 2 | `failureId`, `projectId`, `repoFullName`, `runId`, `headSha`, `branch`, `workflowName` |
-| `GitHubClient` service | Dev 1 → Dev 2 | `getFailedJobLogs(failureId)`, `getFileContents(repo, path, ref)`, `listRecentCommits(repo, ref)` |
-| `FixProposal` object | Dev 2 → Dev 1 | `failureId`, `classification`, `outcome` (`fix` / `diagnosis` / `retry`), `patch` (unified diff, optional), `explanation`, `confidence` |
-| Testbed `meta.json` | Dev 3 → Dev 2 | `id`, `slug`, `class`, `expectedOutcome`, `description`, `expectedFiles` |
-| Eval result row | Dev 3 → all | `failureId`, `classifiedCorrectly`, `outcomeCorrect`, `validationPassed`, `wouldMerge`, `secretLeak`, `minutes` |
+| `FailureDetected` job | Yogesh → Dhruv | `failureId`, `projectId`, `repoFullName`, `runId`, `headSha`, `branch`, `workflowName` |
+| `GitHubClient` service | Yogesh → Dhruv | `getFailedJobLogs(failureId)`, `getFileContents(repo, path, ref)`, `listRecentCommits(repo, ref)`, `createPullRequest({ repo, baseSha, branchName, patch, title, body })` |
+| Diagnosis API and `DiagnosisPanel` | Dhruv → Yogesh | `GET /api/failures/:id/diagnosis` (class, reason, confidence, proposed patch, validation, PR link) and a React component Yogesh embeds in the failure detail page |
+| `FixProposal` object | within Dhruv's agent | `failureId`, `classification`, `outcome` (`fix` / `diagnosis` / `retry`), `patch`, `explanation`, `confidence` |
+| `validatePatch()` | Ishan → Dhruv | Input: `repo`, `sha`, `patch`. Output: pass/fail per step and a short summary |
+| Testbed `meta.json` | Ishan → Dhruv | `id`, `slug`, `class`, `expectedOutcome`, `description`, `expectedFiles` |
+| Eval result row | Ishan → all | `failureId`, `classifiedCorrectly`, `outcomeCorrect`, `validationPassed`, `wouldMerge`, `secretLeak`, `minutes` |
+
+**Database changes:** Yogesh owns the first migration (users, projects, runs, failures). Dhruv adds his tables in separate migrations. Pull `main` right before creating any migration.
 
 ---
 
 ## 3. Weekly milestones
 
-| Week | Dev 1 | Dev 2 | Dev 3 | Integration checkpoint |
+| Week | Yogesh | Ishan | Dhruv | Checkpoint |
 |---|---|---|---|---|
-| 1 | GitHub App, login with GitHub | Log cleanup + redaction on sample logs, failures page shell | Create testbed repo, baseline app, first 5 failures, CI for main repo | Contracts agreed. Testbed workflow runs green on `main` and red on failure branches |
-| 2 | Connect repo, projects, webhook endpoint, `failures` table | Classifier v1 on collected logs | Remaining failures (20 total), webhook test fixtures | Break a testbed branch → failure row appears in the app |
-| 3 | `GitHubClient`: logs, files, commits | Classifier accuracy report, failures list and detail pages | Eval harness v1 (classification only) | First eval run: classification accuracy number |
-| 4-5 | PR creation service | Fix agent + context builder | Sandbox validator (apply patch, rerun build and tests in a container) | A fix PR is opened for an easy failure |
-| 6-7 | Approval actions (approve, reject, request change), audit log | Failure detail with proposed patch and validation result | Eval harness v2 (full scoring), more test coverage | Full flow works for 3 failures |
-| 8 | Demo prep | Prompt and context fixes for worst cases | Full run of all 20, final scores | Go / change approach / narrow, decided together |
+| 1 | GitHub App, login with GitHub | Create `failure-testbed`, healthy app, unit tests, workflow green on `main` | Collect first logs from the testbed, build log cleaner and redactor | Contracts agreed. Testbed is green on `main` and red on a failure branch |
+| 2 | Connect repo → project, webhook endpoint, `Run`/`Job`/`Step`/`Failure` tables | Integration and smoke tests, failure branches 1-10, main repo CI | Classifier v1 on collected logs | Break a testbed branch → the failure appears in the app |
+| 3 | Runs list, run detail (jobs, steps, durations), log viewer | Failure branches 11-20, eval harness v1 (classification only) | Classifier accuracy report, diagnosis API, `DiagnosisPanel` | First eval run: classification accuracy |
+| 4-5 | `createPullRequest` in the GitHub client, failures list and detail pages | Fix validator (sandbox) | Context builder, fix agent, agent traces | A fix PR is opened for an easy failure |
+| 6-7 | Approve / reject / request-change, audit log, project overview stats | Eval harness v2 (full scoring), test coverage in CI | Fix panel with validation result, platform metrics | Full flow works for 3 failures |
+| 8 | Demo prep | Final run of all 20 failures | Prompt and context fixes for the worst cases | Decide together: continue, change approach, or narrow |
 
 Targets at week 8: classification ≥ 80%, validated fix PRs ≥ 30% of rows 1-17, zero secret leaks.
 
@@ -55,175 +71,185 @@ Targets at week 8: classification ≥ 80%, validated fix PRs ≥ 30% of rows 1-1
 ## 4. Working agreements
 
 - Follow `AGENTS.md` and the skills in `.claude/skills/`. One task, one task file in `tasks/`, one branch, one PR.
-- Run `pnpm tasks:list` at the start of each day. Check overlaps before starting.
-- Open a PR for every change. Another teammate reviews. Rebase on `main` before opening.
-- When a contract needs to change, post it in the team chat first, then update the shared schema in its own small PR.
-- Short sync (15 minutes, same time daily or every other day): what is done, what is next, what is blocked.
+- Run `pnpm tasks:list` at the start of each day and check overlaps before starting.
+- Every change goes through a PR. A teammate reviews. Rebase on `main` first.
+- Change a contract only after posting it in the team chat, in its own small PR.
+- Short sync (15 minutes): done, next, blocked.
 
 ---
 
-## 5. Dev 1: GitHub integration
+## 5. Yogesh: GitHub integration and CI views
 
-**Goal:** a user logs in with GitHub, connects a repo, and the platform receives and stores failed workflow runs, can read logs and files, and can open pull requests.
+**Goal:** anyone can link a GitHub repo to a project and then see all CI runs, steps, logs, and failures for it in the app.
 
-### Steps and to-dos
-
-**Step 1. Create the GitHub App (do this first, everyone depends on it)**
-- [ ] GitHub → Settings → Developer settings → GitHub Apps → New GitHub App (under your organization, not a personal account).
-- [ ] Webhook URL: your tunnel URL + `/api/webhooks/github`. Generate a webhook secret.
+### Step 1. Create the GitHub App (everyone depends on this)
+- [ ] GitHub organization → Settings → Developer settings → GitHub Apps → New GitHub App.
+- [ ] Webhook URL: tunnel URL + `/api/webhooks/github`. Generate a webhook secret.
 - [ ] Repository permissions: **Contents** read and write, **Pull requests** read and write, **Actions** read, **Metadata** read.
-- [ ] Subscribe to events: **Workflow run**.
-- [ ] Enable "Request user authorization (OAuth) during installation" and set the callback URL to the API.
-- [ ] Generate a private key (`.pem`). Never commit it. Store the App ID, client ID, client secret, webhook secret, and key in `.env` (add placeholders to `.env.example`).
-- [ ] Set up a tunnel (Cloudflare Tunnel or ngrok) with a stable URL, and document it in `docs/guides/github-app-setup.md`.
+- [ ] Subscribe to events: **Workflow run** and **Workflow job**.
+- [ ] Enable user authorization (OAuth) during installation. Set the callback URL to the API.
+- [ ] Generate a private key. Never commit it. Put the App ID, client ID, client secret, webhook secret, and key in `.env` and placeholders in `.env.example`.
+- [ ] Set up a stable tunnel (Cloudflare Tunnel or ngrok). Document it in `docs/guides/github-app-setup.md`.
 
-**Step 2. Login with GitHub**
-- [ ] Add auth in `apps/api` (`modules/auth`): GitHub OAuth, session or JWT, `GET /api/auth/me`.
-- [ ] Store users in the `User` table (GitHub id, login, avatar). Never store tokens in plain text.
-- [ ] Web: login button, callback handling, logged-in header with the user name.
-- [ ] Test: login works, logout works, protected endpoint returns 401 when logged out.
+### Step 2. Login with GitHub
+- [ ] `modules/auth`: GitHub OAuth, session or JWT, `GET /api/auth/me`.
+- [ ] Store users (GitHub id, login, avatar). Never store tokens in plain text.
+- [ ] Web: login button, callback, header with the user name.
+- [ ] Tests: login, logout, 401 when logged out.
 
-**Step 3. Installations and repo connect**
-- [ ] Handle the installation flow and store the installation id per organization.
-- [ ] `GitHubModule` with Octokit using GitHub App authentication to get short-lived installation tokens.
-- [ ] `GET /api/github/repos`: list repos available to the installation.
-- [ ] `POST /api/projects`: save a chosen repo as a project (belongs to an organization).
-- [ ] Web: "Connect repo" page and a project list page.
+### Step 3. Link repos to projects
+- [ ] Store the installation id per organization.
+- [ ] `GitHubModule` with Octokit and GitHub App authentication (short-lived installation tokens).
+- [ ] `GET /api/github/repos` lists repos available to the installation.
+- [ ] `POST /api/projects` saves a chosen repo as a project.
+- [ ] Web: "Connect repo" page and project list page.
+- [ ] On connect, backfill the last 20 workflow runs so the project is not empty.
 
-**Step 4. Webhook endpoint**
-- [ ] `POST /api/webhooks/github`: read the raw body, verify `X-Hub-Signature-256` (HMAC SHA-256 with the webhook secret). Reject invalid signatures with 401.
-- [ ] Handle only `workflow_run` events with `action = completed` and `conclusion = failure`. Ignore everything else with 200.
-- [ ] De-duplicate using the `X-GitHub-Delivery` header and the run id, so a redelivered webhook creates one failure.
-- [ ] Save a `Failure` row, then enqueue the `FailureDetected` job (contract above).
-- [ ] Tests: valid signature, invalid signature, duplicate delivery, non-failure event.
+### Step 4. Webhooks
+- [ ] `POST /api/webhooks/github`: use the raw body, verify `X-Hub-Signature-256` (HMAC SHA-256), reject invalid signatures with 401.
+- [ ] Handle `workflow_run` and `workflow_job` events. Upsert `Run`, `Job`, and `Step` rows with status, conclusion, start and end times.
+- [ ] When a run completes with `conclusion = failure`, create a `Failure` row and enqueue `FailureDetected`.
+- [ ] De-duplicate with `X-GitHub-Delivery` and run id, so a redelivered webhook changes nothing.
+- [ ] Tests: valid and invalid signature, duplicate delivery, out-of-order events, non-failure events.
 
-**Step 5. GitHubClient for Dev 2**
-- [ ] `getFailedJobLogs(failureId)`: list jobs of the run, find the failed ones, download job logs. Return text per job and step name.
-- [ ] `getFileContents(repo, path, ref)` and `listRecentCommits(repo, ref)`.
-- [ ] Handle rate limits and 404s with clear errors.
+### Step 5. GitHub client (for Dhruv, by end of week 3)
+- [ ] `getFailedJobLogs(failureId)`: find failed jobs of the run, download job logs, return text per job and step.
+- [ ] `getFileContents` and `listRecentCommits`.
+- [ ] `createPullRequest`: create a branch from `baseSha`, apply the patch, commit, open a PR. Never push to the default branch.
+- [ ] Handle rate limits and 404s with clear errors. Test with a fake client and once against the testbed repo.
 
-**Step 6. Pull request creation (weeks 4-5)**
-- [ ] Input: a `FixProposal` with a patch. Create a branch from the failing commit, apply the patch, commit, open a PR.
-- [ ] PR description contains: classification, explanation, log excerpt (redacted), validation result.
-- [ ] Never push to the user's default branch.
-- [ ] Tests with a fake GitHub client, plus one real run against the testbed repo.
+### Step 6. CI views in the web app
+- [ ] **Project overview:** latest runs, success rate, average duration, failure count.
+- [ ] **Runs list:** filter by branch, workflow, status.
+- [ ] **Run detail:** jobs and steps as a timeline with status and duration.
+- [ ] **Log viewer:** per step, collapsible, searchable, fetched on demand and cached.
+- [ ] **Failures list and detail:** run info, redacted log excerpt, and Dhruv's `DiagnosisPanel` embedded.
 
-**Step 7. Approval actions and audit (weeks 6-7)**
-- [ ] Approve, reject, and request-change actions on a fix attempt, stored with who and when.
-- [ ] Audit log entry for every AI action and every human decision.
+### Step 7. Approval and audit (weeks 6-7)
+- [ ] Approve, reject, and request-change on a fix attempt, stored with who and when.
+- [ ] Audit log entry for each AI action and each human decision.
 
 ### Definition of done
-Break a testbed branch → the failure appears in the app within seconds, its logs can be fetched, and (later) a PR appears on the testbed repo.
+Break a testbed branch → the run, steps, logs, and failure appear in the app within seconds, and (later) the fix PR is linked on the failure page.
 
 ---
 
-## 6. Dev 2: Monitoring and failure intelligence
+## 6. Dhruv: agent ops and monitoring support
 
-**Goal:** turn a raw failure into a safe, useful diagnosis, show it in the dashboard, and later produce fix proposals.
+**Goal:** turn a raw failure into a safe diagnosis and, when appropriate, a validated fix PR. Make every agent action visible and measurable.
 
-### Steps and to-dos
+### Part A. Failure intelligence (weeks 1-3)
 
-**Step 1. Collect real logs first (week 1, before the platform exists)**
-- [ ] Get the first failing testbed branches from Dev 3, download their logs from GitHub Actions, and save them in `apps/worker/test/fixtures/logs/` (fake data only).
-- [ ] Use these as input for every step below.
+**A1. Collect real logs first (week 1)**
+- [ ] Take the first failing testbed branches from Ishan, download their logs, and store fake-data fixtures in `apps/worker/test/fixtures/logs/`.
 
-**Step 2. Log cleanup**
-- [ ] `log-cleaner` in `apps/worker/src/failures/`: strip ANSI codes and timestamps, keep the failing step, extract the error lines plus some context lines, enforce a maximum size.
-- [ ] Tests with the fixture logs.
+**A2. Log cleanup**
+- [ ] `log-cleaner`: strip ANSI codes and timestamps, keep the failing step, extract error lines plus context, enforce a maximum size. Tests with fixtures.
 
-**Step 3. Redaction (must exist before any text reaches a model)**
-- [ ] `redactor`: remove GitHub tokens (`ghp_`, `ghs_`), AWS keys, private key blocks, JWTs, bearer tokens, `KEY=value` style secrets, emails, and IP addresses.
-- [ ] Tests: each pattern, plus a test that fails if any known fake secret in the fixtures survives.
-- [ ] Rule: the AI client only accepts redacted text (enforce with a type, e.g. `RedactedText`).
+**A3. Redaction (must exist before any text reaches a model)**
+- [ ] `redactor`: GitHub tokens, AWS keys, private key blocks, JWTs, bearer tokens, `KEY=value` secrets, emails, IP addresses.
+- [ ] Tests for each pattern, and a test that fails if any known fake secret in the fixtures survives.
+- [ ] The AI client accepts only a `RedactedText` type, so unredacted text cannot be sent by mistake.
 
-**Step 4. Classifier**
+**A4. Classifier**
 - [ ] Worker processor for `FailureDetected`: fetch logs via `GitHubClient`, clean, redact, classify.
-- [ ] Classes: `code`, `dependency`, `config`, `infra`, `secrets`, `flaky`. Use structured output validated by Zod, with a reason and a confidence value.
-- [ ] Store the diagnosis on the failure.
-- [ ] Run it against all collected logs and record accuracy against Dev 3's `meta.json`. Target ≥ 80% before building the fix agent.
+- [ ] Classes: `code`, `dependency`, `config`, `infra`, `secrets`, `flaky`. Structured output validated by Zod, with a reason and confidence.
+- [ ] Store a `Diagnosis`. Expose `GET /api/failures/:id/diagnosis` and the `DiagnosisPanel` component.
+- [ ] Measure accuracy against Ishan's `meta.json`. **Target ≥ 80% before building the fix agent.**
 
-**Step 5. Failures dashboard (monitoring v1)**
-- [ ] Web `features/failures/`: list with status and class, filters, detail page showing redacted logs, classification, reason, and later the proposed patch and validation result.
-- [ ] Project overview with counts: failures by class, fix PRs opened, merged, rejected.
+### Part B. Fix agent and automated pull requests (weeks 4-7)
 
-**Step 6. Fix agent (weeks 4-5, only after Step 4 passes)**
-- [ ] Context builder: failing files named in the log, recent commits, config files (Dockerfile, workflow, manifests). No secret values.
-- [ ] Fix agent returns a `FixProposal`. For `infra`, `secrets`, and `flaky` it must return `outcome = diagnosis` or `retry` with guidance and no patch.
-- [ ] Pass the patch to Dev 3's validator, and attach the result.
+- [ ] **Context builder:** failing files named in the log, recent commits, config files (Dockerfile, workflow, manifests). No secret values.
+- [ ] **Fix agent:** returns a `FixProposal`. For `infra`, `secrets`, and `flaky` it must return `diagnosis` or `retry` guidance and no patch.
+- [ ] **Guardrails:** the agent only produces patches and never executes anything. Limit patch size and number of files. Never edit secret files or workflow permissions. Skip below a confidence threshold.
+- [ ] **Validation:** send each patch to Ishan's `validatePatch()`. Open a PR only if it passes. Otherwise store the attempt with the reason.
+- [ ] **PR creation:** call Yogesh's `createPullRequest` with a description containing classification, explanation, redacted log excerpt, and validation result.
+- [ ] **Fix panel:** show the patch, validation result, and PR link inside the failure detail page.
 
-**Step 7. After the week 8 decision (not before)**
-- [ ] Prometheus and Grafana provisioning, the Metrics Gateway, custom widgets, alerting tabs (see `docs/architecture/`).
+### Part C. Agent ops (build alongside Part B)
+- [ ] **Traces:** an `AgentRun` record for every attempt: failure, prompt version, model, context files used, tokens, cost, latency, outcome.
+- [ ] **Prompt versions:** prompts live in the repo as files with a version number. Every `AgentRun` stores which version produced it.
+- [ ] **Replay:** re-run an attempt from its stored redacted inputs, so you can test a prompt change against past failures.
+- [ ] **Limits:** per-project daily cost and attempt caps, with a clear message when reached.
+- [ ] **Human loop:** every PR waits for human approval. The agent never merges.
+
+### Part D. Monitoring support
+**Now (weeks 5-7): platform metrics**
+- [ ] Add Prometheus-format metrics (`prom-client`) to the API and worker: failures detected, classification results, fix attempts by outcome, validation pass rate, queue depth, job duration, agent cost.
+- [ ] A simple Monitoring page in the web app showing these numbers.
+
+**After the week 8 decision**
+- [ ] Prometheus and Grafana provisioning through IaC with the approval loop, the Metrics Gateway, custom widgets, and the Alerting tab (see `docs/architecture/`).
 
 ### Definition of done
-A failed run produces a stored, redacted, correctly classified diagnosis visible in the dashboard, with no secrets in any model input.
+A failed run produces a stored, redacted, correctly classified diagnosis in the dashboard. For fixable failures it opens a validated PR. Every agent attempt has a trace, and no secrets reach any model input.
 
 ---
 
-## 7. Dev 3: Testing and quality
+## 7. Ishan: tests, test repo, eval, and validation
 
-**Goal:** a trustworthy way to measure the product. A separate test repo with intentional failures, an eval harness that scores results, CI for the main repo, and a sandbox that validates fixes.
+**Goal:** a trustworthy way to measure the product, plus a test repo with realistic tests that the platform links to as a customer project.
 
-### Part A. Create the new testing repo (`failure-testbed`)
+### Part A. Create the testing repo (`failure-testbed`)
 
-Why a separate repo: the GitHub App needs real repos with real Actions runs, and the intentional failures must not pollute the product repo.
+Why a separate repo: the GitHub App needs real repos with real Actions runs, and intentional failures must not pollute the product repo.
 
 **A1. Create and protect the repo**
-- [ ] In your GitHub organization: New repository → name `failure-testbed`.
-- [ ] Visibility: public is fine, since it holds only fake sample code and no secrets. It also avoids using up private Actions minutes. Use private if you prefer.
-- [ ] Add a README, a `.gitignore` for Node, and an MIT license (optional).
-- [ ] Settings → Branches: protect `main` (require PR). Failure branches `fail/**` are not protected.
-- [ ] Add teammates as collaborators or organization members.
-- [ ] Install the GitHub App (made by Dev 1) on this repo.
+- [ ] In your GitHub organization: New repository → `failure-testbed`.
+- [ ] Public is fine (fake sample code only, no secrets) and avoids using private Actions minutes.
+- [ ] Add a README and a Node `.gitignore`.
+- [ ] Settings → Branches: protect `main` (PR required). Leave `fail/**` branches unprotected.
+- [ ] Add teammates and install Yogesh's GitHub App on this repo.
 
-**A2. Clone and create the structure**
+**A2. Structure**
 ```bash
 git clone git@github.com:<org>/failure-testbed.git
 cd failure-testbed
-mkdir -p app/src app/test app/k8s failures scripts .github/workflows
+mkdir -p app/src app/test/{unit,integration,e2e} app/k8s failures scripts .github/workflows
 ```
 ```
 failure-testbed/
-├─ app/                        # small healthy Node + TypeScript API
-│  ├─ src/                     # index.ts, routes/health.ts, math.ts
-│  ├─ test/                    # unit tests
-│  ├─ k8s/                     # deployment.yaml, service.yaml
+├─ app/                          # small healthy Node + TypeScript API with Postgres
+│  ├─ src/                       # index.ts, routes/health.ts, routes/items.ts, math.ts
+│  ├─ test/
+│  │  ├─ unit/                   # pure logic
+│  │  ├─ integration/            # API + real Postgres
+│  │  └─ e2e/                    # smoke test against the built container
+│  ├─ k8s/                       # deployment.yaml, service.yaml
 │  ├─ Dockerfile
-│  ├─ package.json, tsconfig.json
+│  └─ package.json, tsconfig.json
 ├─ .github/workflows/ci-deploy.yml
-├─ failures/
-│  ├─ 01-typo-import/          # patch.diff + meta.json
-│  └─ ...
-├─ scripts/
-│  ├─ create-branches.sh       # makes fail/NN-slug branches from main
-│  ├─ verify-patches.sh        # checks every patch applies cleanly to main
-│  └─ reset-branches.sh        # deletes and recreates failure branches
+├─ failures/                     # NN-slug/{patch.diff, meta.json}
+├─ scripts/                      # create-branches.sh, verify-patches.sh, reset-branches.sh
 └─ README.md
 ```
 
-**A3. Build the healthy baseline app**
-- [ ] Node 22 + TypeScript + Express with `GET /health`, a few functions (for example `math.ts`), and 5-10 unit tests that pass. Use the same test runner your main repo uses.
-- [ ] Scripts in `package.json`: `lint`, `typecheck`, `test`, `build`, `start`.
-- [ ] `Dockerfile` that builds and starts the app on a fixed port.
-- [ ] Kubernetes `deployment.yaml` and `service.yaml` with a readiness probe on `/health`.
+**A3. Baseline app and test suites (all must pass on `main`)**
+- [ ] App: Express + TypeScript, `GET /health`, CRUD on `/items` stored in Postgres, a few pure functions in `math.ts`.
+- [ ] **Unit tests** (`test/unit`): pure functions and validation logic, no I/O. Use the same runner as the main repo.
+- [ ] **Integration tests** (`test/integration`): `supertest` against the app with a real Postgres (service container in CI, Docker locally). Cover create, read, update, delete, and error cases.
+- [ ] **End-to-end smoke tests** (`test/e2e`): start the built container, call `/health` and `/items`, check responses.
+- [ ] **Static checks:** lint and typecheck.
+- [ ] Scripts in `package.json`: `lint`, `typecheck`, `test:unit`, `test:integration`, `test:e2e`, `build`.
+- [ ] `Dockerfile` that builds and starts the app on a fixed port, and Kubernetes manifests with a readiness probe on `/health`.
 
-**A4. Build the workflow (`ci-deploy.yml`)**
-Triggers: push to `main` and `fail/**`. Steps:
-1. Checkout, setup Node 22, `npm ci`
-2. Lint, typecheck, test, build
-3. `docker build`
-4. Start the container, wait, `curl` the `/health` endpoint (this is the deployment smoke test)
-5. Validate the Kubernetes manifests (for example with kubeconform, or `kubectl apply --dry-run=client`)
+**A4. Workflow (`ci-deploy.yml`)**
+Triggers: push to `main` and `fail/**`. Use separate jobs so each failure shows up in a distinct job and step, which also gives Yogesh's step views realistic data:
+1. `static`: install, lint, typecheck
+2. `unit`: unit tests
+3. `integration`: integration tests with a Postgres service container
+4. `build-and-smoke`: build, `docker build`, start the container, run e2e smoke tests
+5. `manifests`: validate the Kubernetes manifests (for example with kubeconform)
 
-No real cluster is needed. The container smoke test and manifest validation stand in for a deployment.
+No real cluster is needed. The smoke test and manifest validation stand in for a deployment.
 
 **A5. Verify the baseline**
-- [ ] Push to `main`. The workflow must be **green**.
-- [ ] If it is not green, fix it before making any failures.
+- [ ] Push to `main` and confirm every job is green before creating any failures.
 
 **A6. Create the failures**
-For each of the 20 rows in `docs/product/PLAN.md`:
-- [ ] Create a branch from `main`, make exactly one change that causes that failure, and confirm the workflow goes red for the intended reason.
-- [ ] Save the change: `git diff main > failures/NN-slug/patch.diff`.
+The 20 failures from `docs/product/PLAN.md`. Make sure they cover every test type: at least one unit test failure (for example an assertion broken by a signature change), one integration failure (wrong database environment variable), one e2e smoke failure (wrong port), and one flaky test.
+- [ ] For each: branch from `main`, make exactly one change, confirm the workflow goes red for the intended reason.
+- [ ] Save it: `git diff main > failures/NN-slug/patch.diff`.
 - [ ] Write `failures/NN-slug/meta.json`:
 ```json
 {
@@ -235,37 +261,38 @@ For each of the 20 rows in `docs/product/PLAN.md`:
   "expectedFiles": ["app/src/index.ts"]
 }
 ```
-- [ ] Ideas for the non-code rows: #18 pull a private image that returns "denied" for registry authentication; #19 a step that exits with "DEPLOY_TOKEN is not set"; #20 a step that fetches from an unreachable address with a short timeout to imitate a network flake.
-- [ ] Delete the manual branch. Branches are always generated from the patches so they can be recreated.
+- [ ] Ideas for non-code rows: registry authentication denied on an image pull; a step exiting with "DEPLOY_TOKEN is not set"; a step fetching from an unreachable address with a short timeout to imitate a network flake.
+- [ ] Delete the manual branch. Branches are always generated from patches so they can be recreated.
 
 **A7. Scripts**
-- [ ] `verify-patches.sh`: apply every patch to a clean checkout of `main` and fail if one does not apply.
-- [ ] `create-branches.sh`: for each failure folder, create `fail/NN-slug` from `main`, apply the patch, commit, push.
-- [ ] `reset-branches.sh`: delete remote `fail/*` branches and recreate them (use after changing `main`).
-- [ ] CI job in this repo that runs `verify-patches.sh` on every PR to `main`.
+- [ ] `verify-patches.sh`: apply every patch to a clean checkout of `main`, fail if one does not apply.
+- [ ] `create-branches.sh`: create `fail/NN-slug` from `main`, apply the patch, commit, push.
+- [ ] `reset-branches.sh`: delete and recreate remote `fail/*` branches (use after `main` changes).
+- [ ] A CI job in this repo that runs `verify-patches.sh` on every PR to `main`.
 - [ ] Document usage in the testbed README.
 
-### Part B. CI and test foundations for the main repo
-- [ ] `ci.yml`: install with pnpm cache, lint, typecheck, test, build. Add a Postgres service and run `prisma migrate deploy` against the empty database.
-- [ ] Test utilities: fake GitHub webhook payloads and signature helper, a fake `GitHubClient`, a test database setup (Docker Postgres, reset between tests).
-- [ ] Integration tests for the webhook endpoint with Dev 1.
+### Part B. Main repo CI and test foundations
+- [ ] `ci.yml`: pnpm install with cache, lint, typecheck, test, build, plus a Postgres service running `prisma migrate deploy` on an empty database.
+- [ ] `packages/testing`: fake GitHub webhook payloads and a signature helper, a fake `GitHubClient`, test database setup and reset.
+- [ ] Integration tests for the webhook endpoint with Yogesh, and for the failure worker with Dhruv.
 - [ ] Coverage report in CI (no hard threshold yet).
+- [ ] Each person still writes tests for their own features. Ishan provides the tools and the cross-module tests.
 
-### Part C. Eval harness (`apps/eval` in the main repo)
-- [ ] CLI: `pnpm eval run --ids 01,02` (default all).
-- [ ] For each failure: trigger the workflow run on its `fail/NN-slug` branch (re-run through the GitHub API), wait for the platform to process it (poll the `failures` table), collect classification, outcome, and PR URL.
-- [ ] Compare with `meta.json`. Write a row per failure to `eval-results/YYYY-MM-DD.csv` using the scoring fields in `docs/product/PLAN.md`.
+### Part C. Eval harness (`apps/eval`)
+- [ ] CLI: `pnpm eval run --ids 01,02` (default: all).
+- [ ] For each failure: re-run the workflow on its `fail/NN-slug` branch through the GitHub API, wait for the platform to process it, collect classification, outcome, and PR URL.
+- [ ] Compare with `meta.json` and write a row per failure to `eval-results/YYYY-MM-DD.csv`.
 - [ ] Print a summary: classification accuracy, outcome accuracy, validated-fix rate, secret leaks, median time.
-- [ ] Keep result files in git so progress is visible over time.
+- [ ] Keep result files in git to track progress.
 
-### Part D. Sandbox validator (weeks 4-5)
-- [ ] Input: repo, commit, patch. Check out the commit in a temporary directory, apply the patch, run the same steps as the workflow (install, lint, typecheck, test, build, docker build).
-- [ ] Run inside a container with limits: CPU, memory, time, and no access to secrets or the internal network.
-- [ ] Output: pass or fail per step plus a short summary for the PR description.
+### Part D. Fix validator (`packages/validator`, weeks 4-5)
+- [ ] `validatePatch(repo, sha, patch)`: check out the commit in a temporary directory, apply the patch, run the same steps as the workflow (install, lint, typecheck, unit, integration, build).
+- [ ] Run inside a container with CPU, memory, and time limits, and no access to secrets or the internal network.
+- [ ] Return pass/fail per step and a short summary for the PR description.
 - [ ] Tests with one known-good patch and one known-bad patch.
 
 ### Definition of done
-`pnpm eval run` produces a scored table for all 20 failures, the testbed can be rebuilt from patches with one script, and CI blocks broken PRs in the main repo.
+`pnpm eval run` produces a scored table for all 20 failures, the testbed can be rebuilt from patches with one script, CI blocks broken PRs in the main repo, and `validatePatch` gives Dhruv a reliable pass/fail.
 
 ---
 
@@ -274,4 +301,5 @@ For each of the 20 rows in `docs/product/PLAN.md`:
 - **Webhooks do not arrive:** check the tunnel URL in the GitHub App settings and the "Recent deliveries" tab (you can redeliver from there).
 - **Signature check fails:** the raw request body must be used, not the parsed JSON.
 - **Workflow does not run on a failure branch:** confirm the `fail/**` trigger and that Actions are enabled for the repo.
-- **Rebuilt branches differ from the app's data:** after resetting failure branches, old failure rows in the database refer to old commit ids. Clear them with `pnpm db:reset`.
+- **Old failure rows after rebuilding branches:** the commit ids changed. Clear them with `pnpm db:reset`.
+- **Migration conflicts:** pull `main` before creating a migration. Never edit a merged one.
