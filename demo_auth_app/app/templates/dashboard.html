@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Demo Auth App</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="auth-container dashboard-card">
+        <div class="profile-avatar" id="avatar-initial">U</div>
+        <div class="auth-header">
+            <h1 id="welcome-heading" data-testid="welcome-heading">Welcome, User!</h1>
+            <p>You have successfully logged in to the protected dashboard</p>
+        </div>
+
+        <div class="profile-details">
+            <div class="profile-row">
+                <span class="profile-label">Username:</span>
+                <span class="profile-value" id="profile-username" data-testid="profile-username">--</span>
+            </div>
+            <div class="profile-row">
+                <span class="profile-label">Email:</span>
+                <span class="profile-value" id="profile-email" data-testid="profile-email">--</span>
+            </div>
+            <div class="profile-row">
+                <span class="profile-label">User ID:</span>
+                <span class="profile-value" id="profile-id" data-testid="profile-id">--</span>
+            </div>
+        </div>
+
+        <button id="logout-btn" class="btn btn-secondary" data-testid="logout-btn">Log Out</button>
+    </div>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
+
